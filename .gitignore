@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.netrwhist
+
+# 로그 / 런타임
+*.log
+.debate/
+debate-log-*.md
+
+# 임시 파일
+*.tmp
+*.bak
+*.orig
+
+# 환경 / 비밀
+.env
+.env.*
+!.env.example
