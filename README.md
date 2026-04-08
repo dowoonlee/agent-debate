@@ -65,7 +65,8 @@ debate ls                                     # 어디서든 전체 확인
 
 ### 토론 진행
 - **mode 분화 릴레이** — `rebut` / `review` / `agree` / `extend` / `question` / `judge`
-- **요약 후 릴레이** (`relay-sum`) — 화자에게 먼저 요약시킨 뒤 깔끔하게 전달
+- **독립 세션 요약 릴레이** (`relay-sum`) — pane 출력을 캡처해서 `claude --print` 로 요약 후 전달. 화자 컨텍스트 오염 없음 (v0.4.2)
+- **prompt append** — `relay`/`relay-sum` 마지막 인자에 `"추가 지시"` 넣으면 prompt 뒤에 newline 으로 붙음 (v0.4.1)
 - **자동 N라운드** — `debate round 3 review --sum`
 - **중재자 판정** (`verdict`) — A/B 출력을 모아 arbiter 에게 판정 요청
 - **인터랙티브 mode 선택** (`pick`) — fzf/select 메뉴로 mode 고르기
@@ -140,6 +141,7 @@ agent-debate/
 | `DEBATE_ARBITER_CMD` | arbiter pane 기본 CLI (기본 `claude`) |
 | `DEBATE_SESSIONS_DIR` | 세션 저장 디렉토리 (기본 `~/.debate/sessions`) |
 | `DEBATE_AUTO_KEEP` | 자동 보존 세션 최대 개수 (기본 10) |
+| `DEBATE_SUMMARIZER` | `relay-sum` 의 독립 요약기 (`claude` \| `cursor`, 기본 `claude`) |
 
 ## 라이선스
 

@@ -125,11 +125,44 @@ debate relay a b judge         # 중립 판정
 
 ### 요약 후 릴레이
 
-화자에게 먼저 자기 주장을 5~7줄로 요약시키고, 그 요약만 상대에 전달:
+기본 동작은 **독립 stateless 세션** (`claude --print --no-session-persistence`) 으로 요약합니다 — 화자의 컨텍스트를 오염시키지 않고, 토론 turn 수도 소비하지 않습니다.
 
 ```bash
-debate relay-sum a b              # rebut, 요약 대기 10초
-debate relay-sum a b review 15    # review, 요약 대기 15초
+debate relay-sum a b review                     # 기본: iso, A pane 200줄 캡처 후 요약
+debate relay-sum a b review 300                 # 캡처 줄 수 조정
+debate relay-sum a b review "한국어로만"        # append text
+debate relay-sum a b review 300 "추가 지시"     # 줄 수 + append
+
+# 요약 CLI 변경
+DEBATE_SUMMARIZER=cursor debate relay-sum a b review
+
+# 옛 동작 (화자 본인이 요약)
+debate relay-sum a b review --inplace
+debate relay-sum a b review 15 --inplace        # wait_sec=15
+```
+
+| 모드 | 동작 | 4번째 인자 (숫자) |
+|------|------|------------------|
+| **iso** (기본) | pane 출력 캡처 → 독립 headless 세션이 요약 → 상대에 전달 | 캡처할 줄 수 (기본 200) |
+| `--inplace` | 화자에게 직접 "요약해줘" 시키고 응답 캡처 | 응답 대기 초 (기본 10) |
+
+### prompt 뒤에 추가 지시 append (relay / relay-sum 공통)
+
+마지막 인자가 숫자가 아니면 prompt 뒤에 newline 으로 append 됩니다:
+
+```bash
+debate relay a b review "DB 관점에서 더 깊게 파줘"
+debate relay a b review 50 "트랜잭션 격리 수준 언급해줘"
+debate relay-sum a b rebut "코드 라인 인용 포함"
+```
+
+생성되는 prompt:
+```
+상대방(a)의 분석:
+<상대 출력>
+
+이 분석을 코드 관점에서 검토하고 누락/오류/약점을 구체적으로 지적해.
+DB 관점에서 더 깊게 파줘
 ```
 
 ### N 라운드 자동 진행
@@ -333,8 +366,8 @@ debate log clear            # 비우기
 | `debate doctor` | 의존성 점검 |
 | `debate tell <a\|b\|arbiter> <msg>` | 메시지 입력 + Enter |
 | `debate hear <target> [N]` | 출력 N줄 캡처 |
-| `debate relay <from> <to> [mode] [lines]` | 출력 캡처 후 전달 |
-| `debate relay-sum <from> <to> [mode] [wait]` | 요약 시킨 뒤 전달 |
+| `debate relay <from> <to> [mode] [lines] ["append"]` | 출력 캡처 후 전달 |
+| `debate relay-sum <from> <to> [mode] [lines] ["append"] [--inplace]` | 독립 세션으로 요약 후 전달 |
 | `debate round N [mode] [wait] [--sum]` | N라운드 자동 양방향 릴레이 |
 | `debate pick <from> <to>` | mode 메뉴 선택 후 relay |
 | `debate shout [--all] <msg>` | 양쪽 토론자 동시 지시 |
