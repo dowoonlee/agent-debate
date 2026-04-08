@@ -14,36 +14,64 @@ Claude Code, Cursor CLI Agent 같은 CLI 기반 코딩 에이전트를 4-pane tm
 
 ## 빠른 시작
 
+### Homebrew (권장)
+
 ```bash
-git clone <this-repo> agent-debate
+brew install dowoonlee/debate/debate
+debate doctor
+debate start
+```
+
+### 직접 설치
+
+```bash
+git clone https://github.com/dowoonlee/agent-debate.git
 cd agent-debate
 bash install.sh
 source ~/.zshrc
 
-debate doctor          # 의존성 점검
-debate start           # 세션 시작
+debate doctor
+debate start
 ```
 
-human pane(`moderator`)에서:
+moderator pane 에서:
 
 ```bash
 debate tell a "API 500 에러를 'DB 풀 고갈' 가설로 분석해"
 debate tell b "동일 에러를 '레이스 컨디션' 가설로 분석해"
-debate round 3 rebut 20 --sum   # 3라운드 자동 토론 (요약 모드)
-debate verdict                  # arbiter 에게 판정 요청
+debate round 3 rebut 20 --sum    # 3라운드 자동 토론 (요약 모드)
+debate verdict                   # arbiter 에게 판정 요청
 debate hear arbiter 100
+
+debate save auth-bug             # 의미있는 이름으로 저장
+debate stop                      # current → auto-<ts> 로 자동 보존됨
+# 나중에:
+debate resume auth-bug           # 각 에이전트가 native --resume 으로 컨텍스트 복원
 ```
 
 ## 기능
 
+### 토론 진행
 - **mode 분화 릴레이** — `rebut` / `review` / `agree` / `extend` / `question` / `judge`
-- **요약 후 릴레이** — 화자에게 먼저 요약시킨 뒤 깔끔하게 전달
+- **요약 후 릴레이** (`relay-sum`) — 화자에게 먼저 요약시킨 뒤 깔끔하게 전달
 - **자동 N라운드** — `debate round 3 review --sum`
-- **중재자 판정** — `debate verdict` 한 줄
-- **자동 로그** — `~/.debate/log-YYYYMMDD.md` 에 모든 호출 기록
-- **zsh 자동완성** — 서브커맨드/mode/target 모두 한글 설명과 함께
+- **중재자 판정** (`verdict`) — A/B 출력을 모아 arbiter 에게 판정 요청
+- **인터랙티브 mode 선택** (`pick`) — fzf/select 메뉴로 mode 고르기
+
+### 세션 저장 & 복원 (v0.2.0)
+- **Native session resume** — claude `--session-id` / cursor `agent create-chat` 으로 ID 직접 발급, `--resume` 으로 실제 LLM 컨텍스트 복원
+- **자동 보존** — `debate stop` / 다음 `start` 시 current → `auto-<timestamp>` 로 회전 (최근 10개 유지)
+- **명시 저장** — `debate save <name>` 으로 의미있는 이름 부여
+- **복원** — `debate resume <name>` 으로 동일한 4-pane 레이아웃 + 컨텍스트 복원
+- **분기** — `debate fork <name>` (claude `--fork-session`)
+- **export/import** — `debate export <name> <out.tar.gz>` 로 다른 머신 이전
+
+### 운영 편의
+- **자동 로그** — 모든 호출이 `~/.debate/log-YYYYMMDD.md` 에 기록
+- **zsh 자동완성** — 서브커맨드 / mode / target / 저장된 세션 이름까지 한글 설명과 함께
 - **CLI 자유 선택** — `--a claude --b cursor` 등 양쪽을 임의 조합
 - **pane 상단 타이틀바** — `A: claude`, `B: cursor` 굵게 표시 (활성 pane cyan)
+- **base-index 안전** — pane id 기반 레이아웃으로 `pane-base-index` 설정과 무관하게 동작
 
 ## 의존성
 
@@ -82,6 +110,8 @@ agent-debate/
 | `DEBATE_A_CMD` | A pane 기본 CLI (기본 `claude`) |
 | `DEBATE_B_CMD` | B pane 기본 CLI (기본 `cursor`) |
 | `DEBATE_ARBITER_CMD` | arbiter pane 기본 CLI (기본 `claude`) |
+| `DEBATE_SESSIONS_DIR` | 세션 저장 디렉토리 (기본 `~/.debate/sessions`) |
+| `DEBATE_AUTO_KEEP` | 자동 보존 세션 최대 개수 (기본 10) |
 
 ## 라이선스
 

@@ -163,6 +163,46 @@ debate pick a b
 # fzf 가 있으면 fzf 메뉴, 없으면 select 메뉴
 ```
 
+### 세션 저장 / 복원 (v0.2.0)
+
+각 pane 의 native session id (claude `--session-id`, cursor `agent create-chat`) 를 자동 발급/저장해서 나중에 그대로 복원합니다.
+
+```bash
+# 토론 진행 후 의미있는 이름으로 저장
+debate save auth-bug
+
+# 또는 그냥 stop — 자동으로 auto-<timestamp> 로 보존됨 (최근 10개 유지)
+debate stop
+
+# 저장된 세션 목록 / 메타데이터
+debate list
+debate show auth-bug
+
+# 복원 — 각 에이전트가 native --resume 으로 이전 LLM 컨텍스트 그대로
+debate resume auth-bug
+
+# 다른 디렉토리에서 복원
+debate resume auth-bug --in ~/another-clone
+
+# arbiter 까지 복원 (기본은 fresh)
+debate resume auth-bug --include-arbiter
+
+# 분기 — claude 는 --fork-session, cursor 는 새 chatId
+debate fork auth-bug
+
+# 삭제 / 내보내기
+debate forget auth-bug
+debate export auth-bug ~/backup.tar.gz
+```
+
+복원 동작:
+- A pane: claude 면 `claude --resume <uuid>`, cursor 면 `agent --resume <chatId>`
+- B pane: 동일 방식
+- arbiter: 기본 fresh (`--include-arbiter` 시에만 복원)
+- 4-pane 레이아웃 자동 재구성, MODERATOR 타이틀에 `resumed: <name>` 표시
+
+저장 위치: `~/.debate/sessions/<name>/meta` (환경변수 `DEBATE_SESSIONS_DIR` 로 변경)
+
 ### 로그
 
 모든 호출은 자동 기록됩니다:
@@ -210,6 +250,13 @@ debate log clear            # 비우기
 | `debate pick <from> <to>` | mode 메뉴 선택 후 relay |
 | `debate shout [--all] <msg>` | 양쪽 토론자 동시 지시 |
 | `debate verdict [lines]` | a+b 출력을 arbiter 에 판정 요청 |
+| `debate save <name>` | current 세션 저장 |
+| `debate list` | 저장된 세션 목록 |
+| `debate show [name]` | 세션 메타+로그 미리보기 |
+| `debate resume <name> [--include-arbiter] [--in dir]` | native resume 복원 |
+| `debate fork <name>` | 세션 분기 복원 |
+| `debate forget <name>` | 세션 삭제 |
+| `debate export <name> <out.tar.gz>` | 세션 내보내기 |
 | `debate log [tail\|path\|clear]` | 로그 보기/관리 |
 
 ---
