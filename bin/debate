@@ -788,10 +788,23 @@ cmd_hear() {
 cmd_relay() {
   local from="$1"; local to="$2"
   local mode="${3:-rebut}"
-  local lines="${4:-30}"
+  local lines=30
+  local append=""
+  # 4번째: 숫자면 lines, 아니면 append text
+  if [ -n "${4:-}" ]; then
+    if [[ "$4" =~ ^[0-9]+$ ]]; then
+      lines="$4"
+      [ -n "${5:-}" ] && append="$5"
+    else
+      append="$4"
+    fi
+  fi
   local content prompt
   content=$(tmux-bridge read "$from" "$lines")
   prompt=$(_prompt "$mode" "$from" "$content")
+  if [ -n "$append" ]; then
+    prompt="${prompt}"$'\n'"${append}"
+  fi
   _send "$to" "$prompt"
   _log "relay[$mode] $from → $to" "$prompt"
 }
@@ -799,13 +812,26 @@ cmd_relay() {
 cmd_relay_sum() {
   local from="$1"; local to="$2"
   local mode="${3:-rebut}"
-  local wait_sec="${4:-10}"
+  local wait_sec=10
+  local append=""
+  # 4번째: 숫자면 wait_sec, 아니면 append
+  if [ -n "${4:-}" ]; then
+    if [[ "$4" =~ ^[0-9]+$ ]]; then
+      wait_sec="$4"
+      [ -n "${5:-}" ] && append="$5"
+    else
+      append="$4"
+    fi
+  fi
   echo "[*] $from 에게 요약 요청 (대기 ${wait_sec}s)..."
   _send "$from" "지금까지 너의 주장과 근거를 핵심만 5~7줄로 요약해줘. 요약만 출력해."
   sleep "$wait_sec"
   local summary prompt
   summary=$(tmux-bridge read "$from" 80)
   prompt=$(_prompt "$mode" "$from" "$summary")
+  if [ -n "$append" ]; then
+    prompt="${prompt}"$'\n'"${append}"
+  fi
   _send "$to" "$prompt"
   _log "relay-sum[$mode] $from → $to" "$prompt"
   echo "[✓] 요약 전달 완료"
@@ -952,9 +978,11 @@ HITL focus hooks:
   debate verdict [lines]                a+b 출력을 모아 arbiter 에 판정 요청
 
 릴레이 (mode: rebut|review|agree|extend|question|judge):
-  debate relay <from> <to> [mode] [lines]
-  debate relay-sum <from> <to> [mode] [wait_sec]
+  debate relay <from> <to> [mode] [lines] ["추가 지시"]
+                                        4번째가 숫자면 lines, 아니면 prompt 뒤에 append
+  debate relay-sum <from> <to> [mode] [wait_sec] ["추가 지시"]
                                         from 에게 먼저 요약시킨 뒤 to 에 전달
+                                        4번째가 숫자면 wait, 아니면 append
   debate pick <from> <to>               mode 를 메뉴(fzf/select)로 선택 후 relay
   debate round N [mode] [wait_sec] [--sum]
                                         N 라운드 양방향 자동 릴레이
