@@ -163,45 +163,88 @@ debate pick a b
 # fzf 가 있으면 fzf 메뉴, 없으면 select 메뉴
 ```
 
-### 세션 저장 / 복원 (v0.2.0)
+### 다중 세션 (v0.3.0)
+
+각 `debate start` 는 고유 세션 id (`debate-<8자리 uuid>`) 를 자동 발급합니다. `--name` 으로 의미있는 이름도 부여 가능.
+
+```bash
+# 자동 uuid
+debate start --topic "auth bug"
+# → debate-7f3a1b2c
+
+# 의미있는 이름
+debate start --name perf --topic "slow API"
+# → debate-perf
+
+# 동시에 두 개 (다른 터미널)
+debate start --name auth     # 터미널 1
+debate start --name perf     # 터미널 2
+
+# 어디서든 전체 보기
+debate ls
+#   NAME            STATE      CREATED          TOPIC
+#   debate-perf     running*   2026-04-08...   slow API
+#   debate-auth     running    2026-04-08...   auth bug
+#   debate-3e2a8b91            2026-04-07...   (older, stopped)
+#
+# (* = active default; running = tmux 세션 살아있음)
+
+# 실행 중인 세션 attach
+debate attach debate-auth
+
+# 종료 (dir 은 보존)
+debate stop                  # active 세션 종료
+debate stop debate-perf      # 명시 지정
+```
+
+**자동 인식**: moderator pane 안에서 친 명령은 `$TMUX` 환경변수로 그 세션을 자동 인식합니다. 두 debate 가 떠 있어도 각자의 moderator 에서 친 `tell`/`hear`/`relay` 등은 자기 쪽에만 영향을 줍니다.
+
+**외부 호출**: moderator pane 밖에서 호출 시에는 `~/.debate/active` 의 마지막 시작한 세션이 기본값입니다. 명시 지정하려면:
+
+```bash
+DEBATE_SESSION=debate-perf debate hear a
+```
+
+### 세션 저장 / 복원
 
 각 pane 의 native session id (claude `--session-id`, cursor `agent create-chat`) 를 자동 발급/저장해서 나중에 그대로 복원합니다.
 
 ```bash
-# 토론 진행 후 의미있는 이름으로 저장
+# 활성 세션을 의미있는 이름으로 rename
+# (debate-7f3a1b2c → debate-auth-bug, dir + tmux + active 모두 갱신)
 debate save auth-bug
 
-# 또는 그냥 stop — 자동으로 auto-<timestamp> 로 보존됨 (최근 10개 유지)
+# 종료 (dir 은 그대로 남음)
 debate stop
 
-# 저장된 세션 목록 / 메타데이터
-debate list
-debate show auth-bug
+# 메타데이터 미리보기
+debate show debate-auth-bug
 
 # 복원 — 각 에이전트가 native --resume 으로 이전 LLM 컨텍스트 그대로
-debate resume auth-bug
+debate resume debate-auth-bug
 
 # 다른 디렉토리에서 복원
-debate resume auth-bug --in ~/another-clone
+debate resume debate-auth-bug --in ~/another-clone
 
 # arbiter 까지 복원 (기본은 fresh)
-debate resume auth-bug --include-arbiter
+debate resume debate-auth-bug --include-arbiter
 
-# 분기 — claude 는 --fork-session, cursor 는 새 chatId
-debate fork auth-bug
+# 분기 — claude --fork-session, cursor 새 chatId, 새 dir 생성
+debate fork debate-auth-bug
 
-# 삭제 / 내보내기
-debate forget auth-bug
-debate export auth-bug ~/backup.tar.gz
+# 삭제 (running 이면 같이 kill) / 내보내기
+debate forget debate-auth-bug
+debate export debate-auth-bug ~/backup.tar.gz
 ```
 
 복원 동작:
 - A pane: claude 면 `claude --resume <uuid>`, cursor 면 `agent --resume <chatId>`
 - B pane: 동일 방식
 - arbiter: 기본 fresh (`--include-arbiter` 시에만 복원)
-- 4-pane 레이아웃 자동 재구성, MODERATOR 타이틀에 `resumed: <name>` 표시
+- 4-pane 레이아웃 자동 재구성, MODERATOR 타이틀에 세션 id 표시
 
-저장 위치: `~/.debate/sessions/<name>/meta` (환경변수 `DEBATE_SESSIONS_DIR` 로 변경)
+저장 위치: `~/.debate/sessions/<id>/meta` (환경변수 `DEBATE_SESSIONS_DIR` 로 변경)
+회전: `--name` 없이 자동 생성된 `debate-<8자리 uuid>` 만 회전 대상 (최근 `DEBATE_AUTO_KEEP` 개 유지, 기본 10). `--name` 명시 세션은 영구 보존.
 
 ### 로그
 
@@ -250,8 +293,9 @@ debate log clear            # 비우기
 | `debate pick <from> <to>` | mode 메뉴 선택 후 relay |
 | `debate shout [--all] <msg>` | 양쪽 토론자 동시 지시 |
 | `debate verdict [lines]` | a+b 출력을 arbiter 에 판정 요청 |
-| `debate save <name>` | current 세션 저장 |
-| `debate list` | 저장된 세션 목록 |
+| `debate attach [name]` | 실행 중인 세션 attach |
+| `debate save <new-name>` | 활성 세션을 debate-<new-name> 으로 rename |
+| `debate list` | 모든 세션 목록 (running / active*) |
 | `debate show [name]` | 세션 메타+로그 미리보기 |
 | `debate resume <name> [--include-arbiter] [--in dir]` | native resume 복원 |
 | `debate fork <name>` | 세션 분기 복원 |

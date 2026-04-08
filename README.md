@@ -43,10 +43,21 @@ debate round 3 rebut 20 --sum    # 3라운드 자동 토론 (요약 모드)
 debate verdict                   # arbiter 에게 판정 요청
 debate hear arbiter 100
 
-debate save auth-bug             # 의미있는 이름으로 저장
-debate stop                      # current → auto-<ts> 로 자동 보존됨
+debate save auth-bug             # debate-<uuid> → debate-auth-bug 로 rename
+debate stop                      # 종료 (dir 은 보존)
 # 나중에:
-debate resume auth-bug           # 각 에이전트가 native --resume 으로 컨텍스트 복원
+debate resume debate-auth-bug    # native --resume 으로 컨텍스트 복원
+```
+
+여러 debate를 동시에 띄우려면:
+
+```bash
+debate start --name auth --topic "auth bug"   # 터미널 1
+debate start --name perf --topic "slow API"   # 터미널 2
+
+debate ls                                     # 어디서든 전체 확인
+#   debate-perf     running*   ...   slow API
+#   debate-auth     running    ...   auth bug
 ```
 
 ## 기능
@@ -58,12 +69,20 @@ debate resume auth-bug           # 각 에이전트가 native --resume 으로 �
 - **중재자 판정** (`verdict`) — A/B 출력을 모아 arbiter 에게 판정 요청
 - **인터랙티브 mode 선택** (`pick`) — fzf/select 메뉴로 mode 고르기
 
-### 세션 저장 & 복원 (v0.2.0)
+### 다중 세션 (v0.3.0)
+- **세션 id 자동 생성** — 매 `debate start` 가 `debate-<8자리 uuid>` 를 자동 발급. `--name <foo>` 로 의미있는 이름도 가능 (`debate-foo`)
+- **여러 debate 동시 실행** — 각 세션은 고유 tmux 세션 + 저장 dir 로 격리
+- **자동 인식** — moderator pane 안에서 친 명령은 `$TMUX` 로 자기 세션 자동 인식. 두 debate 가 떠 있어도 충돌 없음
+- **외부 호출** — `~/.debate/active` 가 마지막 시작한 세션을 기본값으로. `DEBATE_SESSION=debate-foo debate hear a` 로 명시도 가능
+- **`debate ls`** — 전체 세션 목록 + `running` / `active*` 표시
+- **`debate attach <name>`** — 실행 중인 세션에 들어가기
+
+### 세션 저장 & 복원 (v0.2.0+)
 - **Native session resume** — claude `--session-id` / cursor `agent create-chat` 으로 ID 직접 발급, `--resume` 으로 실제 LLM 컨텍스트 복원
-- **자동 보존** — `debate stop` / 다음 `start` 시 current → `auto-<timestamp>` 로 회전 (최근 10개 유지)
-- **명시 저장** — `debate save <name>` 으로 의미있는 이름 부여
+- **자동 보존** — `debate stop` 후에도 dir 보존. 자동 생성 uuid 세션은 `DEBATE_AUTO_KEEP` (기본 10) 만큼만 유지하고 회전 (`--name` 명시 세션은 보존)
+- **rename 저장** — `debate save <new-name>` 으로 활성 세션을 의미있는 이름으로 rename (dir + tmux 세션 + active 포인터 동시 갱신)
 - **복원** — `debate resume <name>` 으로 동일한 4-pane 레이아웃 + 컨텍스트 복원
-- **분기** — `debate fork <name>` (claude `--fork-session`)
+- **분기** — `debate fork <name>` (claude `--fork-session`, cursor 새 chatId, 새 dir)
 - **export/import** — `debate export <name> <out.tar.gz>` 로 다른 머신 이전
 
 ### 운영 편의
