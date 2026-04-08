@@ -809,31 +809,82 @@ cmd_relay() {
   _log "relay[$mode] $from → $to" "$prompt"
 }
 
+# 독립 세션에서 요약 (stateless headless 호출 — 토론 컨텍스트 오염 없음)
+_summarize_iso() {
+  local content="$1"
+  local cli="${DEBATE_SUMMARIZER:-claude}"
+  local prompt="다음은 어느 토론자 pane 의 출력이다. 핵심 주장과 근거만 5~7줄로 요약해줘. 요약만 출력하고 다른 말은 하지 마.
+
+$content"
+  case "$cli" in
+    claude)
+      claude --print --no-session-persistence -p "$prompt" 2>/dev/null
+      ;;
+    cursor)
+      agent --print "$prompt" 2>/dev/null
+      ;;
+    *)
+      echo "[!] unknown DEBATE_SUMMARIZER: $cli" >&2
+      return 1
+      ;;
+  esac
+}
+
 cmd_relay_sum() {
+  # --inplace 플래그 추출 (옛 동작: 화자에게 직접 요약시킴)
+  local inplace=0
+  local pos=()
+  for a in "$@"; do
+    case "$a" in
+      --inplace) inplace=1 ;;
+      *) pos+=("$a") ;;
+    esac
+  done
+  set -- "${pos[@]}"
+
   local from="$1"; local to="$2"
   local mode="${3:-rebut}"
-  local wait_sec=10
+  local num=""
   local append=""
-  # 4번째: 숫자면 wait_sec, 아니면 append
   if [ -n "${4:-}" ]; then
     if [[ "$4" =~ ^[0-9]+$ ]]; then
-      wait_sec="$4"
+      num="$4"
       [ -n "${5:-}" ] && append="$5"
     else
       append="$4"
     fi
   fi
-  echo "[*] $from 에게 요약 요청 (대기 ${wait_sec}s)..."
-  _send "$from" "지금까지 너의 주장과 근거를 핵심만 5~7줄로 요약해줘. 요약만 출력해."
-  sleep "$wait_sec"
-  local summary prompt
-  summary=$(tmux-bridge read "$from" 80)
+
+  local summary
+  if [ "$inplace" = "1" ]; then
+    # 옛 동작: 화자에게 자기 주장 요약시키고 캡처
+    local wait_sec="${num:-10}"
+    echo "[*] [inplace] $from 에게 요약 요청 (대기 ${wait_sec}s)..."
+    _send "$from" "지금까지 너의 주장과 근거를 핵심만 5~7줄로 요약해줘. 요약만 출력해."
+    sleep "$wait_sec"
+    summary=$(tmux-bridge read "$from" 80)
+  else
+    # 기본: iso — pane 출력 캡처해서 독립 stateless 세션에 요약시킴
+    local lines="${num:-200}"
+    local cli="${DEBATE_SUMMARIZER:-claude}"
+    echo "[*] [iso/$cli] $from pane $lines 줄 캡처 → 독립 세션 요약..."
+    local content
+    content=$(tmux-bridge read "$from" "$lines")
+    summary=$(_summarize_iso "$content")
+    if [ -z "$summary" ]; then
+      echo "[!] 요약 실패 (DEBATE_SUMMARIZER=$cli, 또는 --inplace 시도)"
+      exit 1
+    fi
+  fi
+
+  local prompt
   prompt=$(_prompt "$mode" "$from" "$summary")
   if [ -n "$append" ]; then
     prompt="${prompt}"$'\n'"${append}"
   fi
   _send "$to" "$prompt"
-  _log "relay-sum[$mode] $from → $to" "$prompt"
+  local tag="iso"; [ "$inplace" = "1" ] && tag="inplace"
+  _log "relay-sum[$mode/$tag] $from → $to" "$prompt"
   echo "[✓] 요약 전달 완료"
 }
 
@@ -980,9 +1031,11 @@ HITL focus hooks:
 릴레이 (mode: rebut|review|agree|extend|question|judge):
   debate relay <from> <to> [mode] [lines] ["추가 지시"]
                                         4번째가 숫자면 lines, 아니면 prompt 뒤에 append
-  debate relay-sum <from> <to> [mode] [wait_sec] ["추가 지시"]
-                                        from 에게 먼저 요약시킨 뒤 to 에 전달
-                                        4번째가 숫자면 wait, 아니면 append
+  debate relay-sum <from> <to> [mode] [lines] ["추가 지시"] [--inplace]
+                                        기본: 독립 stateless 세션 (claude --print) 으로 요약
+                                              → 화자 컨텍스트 오염 없음
+                                        --inplace: 옛 동작 (화자 본인에게 요약시킴, 4번째=wait_sec)
+                                        DEBATE_SUMMARIZER=claude|cursor 로 요약 CLI 변경
   debate pick <from> <to>               mode 를 메뉴(fzf/select)로 선택 후 relay
   debate round N [mode] [wait_sec] [--sum]
                                         N 라운드 양방향 자동 릴레이
@@ -1001,6 +1054,7 @@ HITL focus hooks:
   DEBATE_ARBITER_CMD   arbiter pane 기본 CLI (기본 claude)
   DEBATE_SESSIONS_DIR  세션 저장 디렉토리 (기본 ~/.debate/sessions)
   DEBATE_AUTO_KEEP     자동 보존 세션 최대 개수 (기본 10)
+  DEBATE_SUMMARIZER    relay-sum 의 독립 요약기 (claude|cursor, 기본 claude)
 
 target: a | b | arbiter | moderator (start 시 자동 라벨링).
 EOF
