@@ -5,19 +5,35 @@ _debate() {
   local -a cmds modes targets log_subs
   cmds=(
     'start:토론 세션 시작'
-    'stop:세션 종료'
+    'stop:세션 종료 (자동 보존)'
     'doctor:의존성 점검'
     'tell:pane 에 메시지 입력'
     'hear:pane 출력 캡처'
     'shout:양쪽 토론자 동시 지시 (--all 시 arbiter 포함)'
-    'verdict:claude+cursor 출력을 모아 arbiter 에 판정 요청'
+    'verdict:a+b 출력을 모아 arbiter 에 판정 요청'
     'relay:출력을 상대 pane 에 전달'
     'relay-sum:화자에게 요약 시킨 뒤 전달'
     'round:N 라운드 자동 릴레이'
     'pick:mode 를 메뉴로 선택 후 relay'
+    'save:current 세션을 이름으로 저장'
+    'list:저장된 세션 목록'
+    'show:세션 메타+로그 미리보기'
+    'resume:저장된 세션 복원'
+    'fork:세션을 분기 복원'
+    'forget:세션 삭제'
+    'export:세션 tarball 내보내기'
     'log:로그 보기/관리'
     'help:도움말'
   )
+
+  # 저장된 세션 이름 후보
+  _debate_sessions() {
+    local sdir="${DEBATE_SESSIONS_DIR:-$HOME/.debate/sessions}"
+    [ -d "$sdir" ] || return
+    local -a names
+    names=("${(@f)$(ls -1 "$sdir" 2>/dev/null)}")
+    [ ${#names} -gt 0 ] && _describe -t sessions 'session' names
+  }
   modes=(
     'rebut:반론 (기본)'
     'review:코드 관점 검토·약점 지적'
@@ -65,6 +81,9 @@ _debate() {
       ;;
     start)
       (( CURRENT == 3 )) && _path_files -/
+      ;;
+    show|resume|fork|forget|rm|export)
+      (( CURRENT == 3 )) && _debate_sessions
       ;;
   esac
 }
