@@ -41,6 +41,16 @@ _set_active() {
   echo "$1" > "$ACTIVE_FILE"
 }
 
+# tmux key bindings: prefix + a/b/r/m 으로 pane focus 이동
+_install_keybindings() {
+  local debate_path
+  debate_path=$(command -v debate 2>/dev/null) || debate_path="$SELF"
+  tmux bind-key a run-shell "'$debate_path' focus a"        2>/dev/null || true
+  tmux bind-key b run-shell "'$debate_path' focus b"        2>/dev/null || true
+  tmux bind-key r run-shell "'$debate_path' focus arbiter"  2>/dev/null || true
+  tmux bind-key m run-shell "'$debate_path' focus moderator" 2>/dev/null || true
+}
+
 # 사용자 친화적 alias 를 실제 실행 명령으로 변환
 _resolve_cmd() {
   case "$1" in
@@ -303,6 +313,7 @@ cmd_start() {
   _set_active "$SESSION"
 
   _setup_layout "$SESSION" "$project_dir" "$a_label" "$a_cmd" "$b_label" "$b_cmd" "$arbiter_label" "$arbiter_cmd" "MODERATOR — $SESSION"
+  _install_keybindings
   _log "start" "session=$SESSION a=$a_label/$a_sid b=$b_label/$b_sid arbiter=$arbiter_label/$arb_sid topic=$topic"
   tmux attach -t "$SESSION"
 }
@@ -532,6 +543,212 @@ cmd_forget() {
   echo "[✓] forgotten: $name"
 }
 
+cmd_install_hooks() {
+  local debate_path
+  debate_path=$(command -v debate 2>/dev/null) || debate_path="$SELF"
+  command -v python3 &>/dev/null || { echo "[!] python3 필요"; exit 1; }
+
+  echo "[*] hook 설치 — debate 경로: $debate_path"
+
+  # claude: ~/.claude/settings.json 의 Notification hook 추가
+  python3 - "$debate_path" <<'PY'
+import json, os, sys
+debate_path = sys.argv[1]
+path = os.path.expanduser("~/.claude/settings.json")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: data = json.load(f)
+    except Exception: data = {}
+
+hooks = data.setdefault("hooks", {})
+notif = hooks.setdefault("Notification", [])
+# 기존 debate-managed 제거
+notif[:] = [e for e in notif if not any(
+    "debate-managed" in (h.get("command", "") if isinstance(h, dict) else "")
+    for h in (e.get("hooks", []) if isinstance(e, dict) else [])
+)]
+notif.append({
+    "matcher": "permission_prompt|idle_prompt",
+    "hooks": [{
+        "type": "command",
+        "command": f'{debate_path} _hook focus-self  # debate-managed'
+    }]
+})
+# UserPromptSubmit → focus moderator (답변 후 자동 복귀)
+ups = hooks.setdefault("UserPromptSubmit", [])
+ups[:] = [e for e in ups if not any(
+    "debate-managed" in (h.get("command", "") if isinstance(h, dict) else "")
+    for h in (e.get("hooks", []) if isinstance(e, dict) else [])
+)]
+ups.append({
+    "hooks": [{
+        "type": "command",
+        "command": f'{debate_path} _hook focus-moderator  # debate-managed'
+    }]
+})
+
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+print(f"[✓] claude: {path}")
+PY
+
+  # cursor: ~/.cursor/hooks.json
+  python3 - "$debate_path" <<'PY'
+import json, os, sys
+debate_path = sys.argv[1]
+path = os.path.expanduser("~/.cursor/hooks.json")
+os.makedirs(os.path.dirname(path), exist_ok=True)
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: data = json.load(f)
+    except Exception: data = {}
+
+data.setdefault("version", 1)
+hooks = data.setdefault("hooks", {})
+
+def replace_managed(events):
+    for ev in events:
+        lst = hooks.setdefault(ev, [])
+        lst[:] = [e for e in lst if "debate-managed" not in e.get("command", "")]
+
+replace_managed(["stop", "beforeSubmitPrompt"])
+
+hooks.setdefault("stop", []).append({
+    "command": f'{debate_path} _hook focus-self  # debate-managed'
+})
+hooks.setdefault("beforeSubmitPrompt", []).append({
+    "command": f'{debate_path} _hook focus-moderator  # debate-managed'
+})
+
+with open(path, "w") as f:
+    json.dump(data, f, indent=2)
+print(f"[✓] cursor: {path}")
+PY
+
+  echo ""
+  echo "동작:"
+  echo "  - claude 가 권한/입력 대기 시: 그 pane 으로 focus 이동"
+  echo "  - cursor agent stop 시: 그 pane 으로 focus 이동"
+  echo "  - 사용자가 답변 제출 시: moderator pane 으로 자동 복귀"
+}
+
+cmd_uninstall_hooks() {
+  command -v python3 &>/dev/null || { echo "[!] python3 필요"; exit 1; }
+
+  python3 - <<'PY'
+import json, os
+for path in [os.path.expanduser("~/.claude/settings.json"),
+             os.path.expanduser("~/.cursor/hooks.json")]:
+    if not os.path.exists(path): continue
+    try:
+        with open(path) as f: data = json.load(f)
+    except Exception: continue
+    hooks = data.get("hooks", {})
+    changed = False
+    for ev, lst in list(hooks.items()):
+        if not isinstance(lst, list): continue
+        new_lst = []
+        for e in lst:
+            if isinstance(e, dict):
+                inner = e.get("hooks", [])
+                if any("debate-managed" in (h.get("command","") if isinstance(h,dict) else "") for h in inner):
+                    changed = True; continue
+                if "debate-managed" in e.get("command", ""):
+                    changed = True; continue
+            new_lst.append(e)
+        if not new_lst:
+            del hooks[ev]
+            changed = True
+        else:
+            hooks[ev] = new_lst
+    if changed:
+        with open(path, "w") as f: json.dump(data, f, indent=2)
+        print(f"[✓] cleaned: {path}")
+    else:
+        print(f"[-] no debate-managed entries: {path}")
+PY
+}
+
+cmd_hooks_status() {
+  command -v python3 &>/dev/null || { echo "[!] python3 필요"; exit 1; }
+  python3 - <<'PY'
+import json, os
+for label, path in [("claude", "~/.claude/settings.json"),
+                    ("cursor", "~/.cursor/hooks.json")]:
+    p = os.path.expanduser(path)
+    if not os.path.exists(p):
+        print(f"[-] {label}: no settings file"); continue
+    try:
+        with open(p) as f: data = json.load(f)
+    except Exception as e:
+        print(f"[!] {label}: invalid json — {e}"); continue
+    found = []
+    def scan(lst, ev):
+        for e in lst:
+            if isinstance(e, dict):
+                if "debate-managed" in e.get("command", ""):
+                    found.append(ev)
+                for h in e.get("hooks", []):
+                    if isinstance(h, dict) and "debate-managed" in h.get("command", ""):
+                        found.append(ev)
+    for ev, lst in (data.get("hooks") or {}).items():
+        if isinstance(lst, list): scan(lst, ev)
+    if found:
+        print(f"[✓] {label}: installed → {', '.join(found)}")
+    else:
+        print(f"[-] {label}: not installed")
+PY
+}
+
+cmd_focus() {
+  local label="${1:-}"
+  [ -z "$label" ] && { echo "usage: debate focus <a|b|arbiter|moderator>"; exit 1; }
+  local SESSION
+  SESSION=$(_resolve_session 2>/dev/null) || { echo "[!] 활성 세션 없음"; exit 1; }
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[!] tmux 세션 없음: $SESSION"; exit 1
+  fi
+  # 해당 라벨 prefix 가 붙은 pane 의 pane_id 찾기
+  local prefix
+  case "$label" in
+    a)         prefix="A:" ;;
+    b)         prefix="B:" ;;
+    arbiter|r) prefix="ARBITER" ;;
+    moderator|m|mod) prefix="MODERATOR" ;;
+    *) echo "[!] unknown label: $label"; exit 1 ;;
+  esac
+  local pid
+  pid=$(tmux list-panes -t "$SESSION" -F '#{pane_id} #{pane_title}' 2>/dev/null \
+    | awk -v p="$prefix" '$2 ~ ("^" p) {print $1; exit}')
+  [ -z "$pid" ] && { echo "[!] $label pane not found"; exit 1; }
+  tmux select-pane -t "$pid"
+}
+
+# 내부: hook 에서 호출. 현재 pane 에 focus 이동
+cmd__hook() {
+  local action="${1:-}"
+  case "$action" in
+    focus-self)
+      [ -n "${TMUX_PANE:-}" ] && tmux select-pane -t "$TMUX_PANE" 2>/dev/null || true
+      ;;
+    focus-moderator)
+      # 현재 tmux 세션의 MODERATOR pane 찾기
+      local sess
+      sess=$(tmux display-message -p '#{session_name}' 2>/dev/null) || return 0
+      case "$sess" in debate-*) ;; *) return 0 ;; esac
+      local pid
+      pid=$(tmux list-panes -t "$sess" -F '#{pane_id} #{pane_title}' 2>/dev/null \
+        | awk '$2 ~ /^MODERATOR/ {print $1; exit}')
+      [ -n "$pid" ] && tmux select-pane -t "$pid" 2>/dev/null || true
+      ;;
+  esac
+  # hook 표준 출력은 비움 (cursor 가 JSON 파싱 시도하므로 안전한 빈 라인)
+  return 0
+}
+
 cmd_attach() {
   local name="${1:-}"
   if [ -z "$name" ]; then
@@ -665,7 +882,7 @@ cmd_log() {
 
 cmd_doctor() {
   local ok=1
-  for c in tmux tmux-bridge claude; do
+  for c in tmux tmux-bridge claude python3; do
     if command -v "$c" &>/dev/null; then echo "[✓] $c"; else echo "[✗] $c"; ok=0; fi
   done
   if command -v agent &>/dev/null || command -v cursor-agent &>/dev/null; then
@@ -673,7 +890,13 @@ cmd_doctor() {
   else
     echo "[✗] cursor agent"; ok=0
   fi
-  echo "log: $DEBATE_LOG"
+  echo ""
+  echo "── HITL focus hooks ──"
+  cmd_hooks_status 2>/dev/null || echo "(hooks-status check failed)"
+  echo ""
+  echo "log:      $DEBATE_LOG"
+  echo "sessions: $SESSIONS_DIR"
+  echo "active:   $([ -f "$ACTIVE_FILE" ] && cat "$ACTIVE_FILE" || echo '(none)')"
   [ $ok -eq 1 ] || exit 1
 }
 
@@ -693,7 +916,17 @@ debate — Claude Code × Cursor Agent debate CLI
                                         --name 지정 시 debate-<name>
   debate stop [name]                    세션 종료 (dir 은 보존)
   debate attach [name]                  실행 중인 세션에 attach
-  debate doctor                         의존성 점검
+  debate focus <a|b|arbiter|moderator>  활성 세션의 특정 pane 으로 focus 이동
+  debate doctor                         의존성 + hooks 점검
+
+HITL focus hooks:
+  debate install-hooks                  claude/cursor 의 알림 hook 설치
+                                        → HITL 시 자동으로 해당 pane focus
+  debate uninstall-hooks                hook 제거
+  debate hooks-status                   설치 상태 확인
+
+키바인딩 (debate start 시 자동 등록, prefix = Ctrl-b):
+  prefix + a/b/r/m   → A/B/arbiter/moderator pane 으로 focus 이동
 
 세션 저장/복원:
   debate save <new-name>                활성 세션을 debate-<new-name> 으로 rename
@@ -752,6 +985,11 @@ case "$cmd" in
   start)              cmd_start "$@" ;;
   stop|kill)          cmd_stop "$@" ;;
   attach)             cmd_attach "$@" ;;
+  focus)              cmd_focus "$@" ;;
+  install-hooks)      cmd_install_hooks "$@" ;;
+  uninstall-hooks)    cmd_uninstall_hooks "$@" ;;
+  hooks-status)       cmd_hooks_status "$@" ;;
+  _hook)              cmd__hook "$@" ;;
   doctor)             cmd_doctor ;;
   tell)               cmd_tell "$@" ;;
   hear)               cmd_hear "$@" ;;
