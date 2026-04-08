@@ -1,10 +1,10 @@
 class Debate < Formula
   desc "AI 코딩 에이전트 두 명을 tmux 안에서 토론시키는 단일 CLI"
   homepage "https://github.com/dowoonlee/agent-debate"
-  url "https://github.com/dowoonlee/agent-debate/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "094f7e60d98af5720876fa805573f7362bc7f079493890d978cb5470e46d3536"
+  url "https://github.com/dowoonlee/agent-debate/archive/refs/tags/v0.2.0.tar.gz"
+  sha256 "5452e1825a0ca8b8a64bf7b1dc02b6f8b036fb50f73733c6f90e435976f7e57d"
   license "MIT"
-  version "0.1.0"
+  version "0.2.0"
   head "https://github.com/dowoonlee/agent-debate.git", branch: "master"
 
   depends_on "tmux"
