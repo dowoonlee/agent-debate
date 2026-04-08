@@ -19,6 +19,7 @@ Claude Code, Cursor CLI Agent 같은 CLI 기반 코딩 에이전트를 4-pane tm
 ```bash
 brew install dowoonlee/debate/debate
 debate doctor
+debate install-hooks    # HITL 자동 focus (1회 설정)
 debate start
 ```
 
@@ -68,6 +69,14 @@ debate ls                                     # 어디서든 전체 확인
 - **자동 N라운드** — `debate round 3 review --sum`
 - **중재자 판정** (`verdict`) — A/B 출력을 모아 arbiter 에게 판정 요청
 - **인터랙티브 mode 선택** (`pick`) — fzf/select 메뉴로 mode 고르기
+
+### HITL 자동 focus (v0.4.0)
+- **자동 pane focus** — claude/cursor 가 권한 요청·입력 대기 시 해당 pane으로 자동 focus 이동, 답변 제출 후 moderator 로 자동 복귀
+- **claude hooks** — `Notification (permission_prompt|idle_prompt)` → focus pane, `UserPromptSubmit` → focus moderator
+- **cursor hooks** — `stop` → focus pane, `beforeSubmitPrompt` → focus moderator
+- **안전한 머지** — `~/.claude/settings.json` / `~/.cursor/hooks.json` 의 기존 hook 을 보존, marker 기반 install/uninstall
+- **수동 키바인딩** — `prefix + a/b/r/m` 으로 즉시 pane 이동 (debate start 시 자동 등록)
+- 활성화: `debate install-hooks` (1회), 제거: `debate uninstall-hooks`
 
 ### 다중 세션 (v0.3.0)
 - **세션 id 자동 생성** — 매 `debate start` 가 `debate-<8자리 uuid>` 를 자동 발급. `--name <foo>` 로 의미있는 이름도 가능 (`debate-foo`)

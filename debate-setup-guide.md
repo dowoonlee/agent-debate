@@ -163,6 +163,52 @@ debate pick a b
 # fzf 가 있으면 fzf 메뉴, 없으면 select 메뉴
 ```
 
+### HITL 자동 focus (v0.4.0)
+
+claude/cursor 가 사용자 입력을 기다릴 때 자동으로 그 pane 으로 focus 가 이동하고, 답변 후 moderator pane 으로 돌아옵니다. claude/cursor 의 native hook 시스템을 사용합니다.
+
+```bash
+# 최초 1회 설치
+debate install-hooks
+
+# 상태 확인
+debate hooks-status
+#   [✓] claude: installed → Notification, UserPromptSubmit
+#   [✓] cursor: installed → stop, beforeSubmitPrompt
+
+# 제거
+debate uninstall-hooks
+```
+
+설치되는 hook:
+
+| CLI | 이벤트 | 동작 |
+|-----|--------|------|
+| claude | `Notification (permission_prompt\|idle_prompt)` | 해당 pane focus |
+| claude | `UserPromptSubmit` | moderator focus |
+| cursor | `stop` | 해당 pane focus |
+| cursor | `beforeSubmitPrompt` | moderator focus |
+
+설치는 marker 기반(`# debate-managed`)이라 기존 hook 과 충돌하지 않고 `uninstall-hooks` 로 깔끔히 제거됩니다.
+
+### 수동 key bindings
+
+`debate start` 시 tmux 키바인딩이 자동 등록됩니다 (prefix = `Ctrl+b` 기본):
+
+| 키 | 동작 |
+|----|------|
+| `prefix + a` | A pane focus |
+| `prefix + b` | B pane focus |
+| `prefix + r` | arbiter focus |
+| `prefix + m` | moderator focus |
+
+또는 명시 명령:
+
+```bash
+debate focus a
+debate focus moderator
+```
+
 ### 다중 세션 (v0.3.0)
 
 각 `debate start` 는 고유 세션 id (`debate-<8자리 uuid>`) 를 자동 발급합니다. `--name` 으로 의미있는 이름도 부여 가능.
@@ -293,6 +339,10 @@ debate log clear            # 비우기
 | `debate pick <from> <to>` | mode 메뉴 선택 후 relay |
 | `debate shout [--all] <msg>` | 양쪽 토론자 동시 지시 |
 | `debate verdict [lines]` | a+b 출력을 arbiter 에 판정 요청 |
+| `debate focus <a\|b\|arbiter\|moderator>` | 특정 pane 으로 focus 이동 |
+| `debate install-hooks` | HITL 자동 focus hook 설치 |
+| `debate uninstall-hooks` | hook 제거 |
+| `debate hooks-status` | hook 설치 상태 확인 |
 | `debate attach [name]` | 실행 중인 세션 attach |
 | `debate save <new-name>` | 활성 세션을 debate-<new-name> 으로 rename |
 | `debate list` | 모든 세션 목록 (running / active*) |
