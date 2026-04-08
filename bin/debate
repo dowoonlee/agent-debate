@@ -4,13 +4,42 @@
 set -e
 
 DEBATE_LOG="${DEBATE_LOG:-$HOME/.debate/log-$(date +%Y%m%d).md}"
-SESSION="${DEBATE_SESSION:-debate}"
 ARBITER_CMD="${DEBATE_ARBITER_CMD:-claude}"
 A_CMD_DEFAULT="${DEBATE_A_CMD:-claude}"
 B_CMD_DEFAULT="${DEBATE_B_CMD:-cursor}"
 SESSIONS_DIR="${DEBATE_SESSIONS_DIR:-$HOME/.debate/sessions}"
 AUTO_KEEP="${DEBATE_AUTO_KEEP:-10}"
+ACTIVE_FILE="$HOME/.debate/active"
 SELF="$0"
+
+# 세션 id 자동 생성 (debate-<8자리>)
+_gen_session_id() {
+  echo "debate-$(uuidgen | tr 'A-Z' 'a-z' | cut -c1-8)"
+}
+
+# 현재 명령이 사용할 세션 id 결정
+# 우선순위: DEBATE_SESSION 환경변수 > 현재 tmux 세션($TMUX) > ~/.debate/active
+_resolve_session() {
+  if [ -n "${DEBATE_SESSION:-}" ]; then
+    echo "$DEBATE_SESSION"; return 0
+  fi
+  if [ -n "${TMUX:-}" ]; then
+    local cur
+    cur=$(tmux display-message -p '#{session_name}' 2>/dev/null || true)
+    case "$cur" in
+      debate-*) echo "$cur"; return 0 ;;
+    esac
+  fi
+  if [ -f "$ACTIVE_FILE" ]; then
+    cat "$ACTIVE_FILE"; return 0
+  fi
+  return 1
+}
+
+_set_active() {
+  mkdir -p "$(dirname "$ACTIVE_FILE")"
+  echo "$1" > "$ACTIVE_FILE"
+}
 
 # 사용자 친화적 alias 를 실제 실행 명령으로 변환
 _resolve_cmd() {
@@ -103,11 +132,12 @@ _load_meta() {
   set +a
 }
 
-# auto-* 디렉토리 회전 (최근 AUTO_KEEP 개만 유지)
+# 회전: SESSIONS_DIR 의 모든 디렉토리 중 mtime 기준 AUTO_KEEP 개만 유지
+# (사용자가 명시 --name 로 지정한 의미있는 세션은 보존, 자동 생성된 짧은 uuid 만 회전)
 _rotate_autos() {
   [ -d "$SESSIONS_DIR" ] || return 0
   local olds
-  olds=$(ls -1t "$SESSIONS_DIR" 2>/dev/null | grep '^auto-' | tail -n +$((AUTO_KEEP + 1)))
+  olds=$(ls -1t "$SESSIONS_DIR" 2>/dev/null | grep -E '^debate-[0-9a-f]{8}$' | tail -n +$((AUTO_KEEP + 1)))
   [ -z "$olds" ] && return 0
   while IFS= read -r d; do
     [ -n "$d" ] && rm -rf "$SESSIONS_DIR/$d"
@@ -115,12 +145,13 @@ _rotate_autos() {
 }
 
 # 4-pane 레이아웃 셋업 (pane ID 기반 — pane-base-index 영향 안 받음)
-# usage: _setup_layout <project_dir> <a_label> <a_cmd> <b_label> <b_cmd> <arb_label> <arb_cmd> [moderator_title]
+# usage: _setup_layout <session> <project_dir> <a_label> <a_cmd> <b_label> <b_cmd> <arb_label> <arb_cmd> [moderator_title]
 _setup_layout() {
-  local project_dir="$1" a_label="$2" a_cmd="$3"
-  local b_label="$4" b_cmd="$5"
-  local arb_label="$6" arb_cmd="$7"
-  local mod_title="${8:-MODERATOR}"
+  local SESSION="$1"
+  local project_dir="$2" a_label="$3" a_cmd="$4"
+  local b_label="$5" b_cmd="$6"
+  local arb_label="$7" arb_cmd="$8"
+  local mod_title="${9:-MODERATOR}"
 
   tmux kill-session -t "$SESSION" 2>/dev/null || true
 
@@ -155,14 +186,6 @@ _setup_layout() {
   tmux select-pane -t "$PANE_MOD"
 }
 
-# current → auto-<ts> 로 회전 보존
-_archive_current() {
-  local cur="$SESSIONS_DIR/current"
-  [ -d "$cur" ] || return 0
-  local ts; ts=$(date +%Y%m%d-%H%M%S)
-  mv "$cur" "$SESSIONS_DIR/auto-$ts"
-  _rotate_autos
-}
 
 # ─── 내부 유틸 ──────────────────────────────────────────
 
@@ -219,6 +242,7 @@ cmd_start() {
   local b_label="$B_CMD_DEFAULT"
   local arbiter_label="$ARBITER_CMD"
   local topic=""
+  local name=""
 
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -226,16 +250,34 @@ cmd_start() {
       --b)        b_label="$2"; shift 2 ;;
       --arbiter)  arbiter_label="$2"; shift 2 ;;
       --topic)    topic="$2"; shift 2 ;;
-      -h|--help)  echo "usage: debate start [--a claude|cursor] [--b claude|cursor] [--arbiter claude|cursor] [--topic <text>] [project_dir]"; return 0 ;;
+      --name)     name="$2"; shift 2 ;;
+      -h|--help)  echo "usage: debate start [--a claude|cursor] [--b ...] [--arbiter ...] [--topic <text>] [--name <name>] [project_dir]"; return 0 ;;
       *)          project_dir="$1"; shift ;;
     esac
   done
   project_dir="${project_dir:-$(pwd)}"
 
-  # 이전 current 가 있으면 auto- 로 회전 보존
-  _archive_current
+  # 세션 id 결정 (--name 우선, 없으면 자동 uuid)
+  local SESSION
+  if [ -n "$name" ]; then
+    SESSION="debate-$name"
+  else
+    SESSION=$(_gen_session_id)
+  fi
 
-  # 각 pane 의 session id 발급
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[!] $SESSION 이 이미 실행 중입니다 — attach: tmux attach -t $SESSION"
+    exit 1
+  fi
+  if [ -d "$SESSIONS_DIR/$SESSION" ]; then
+    echo "[!] $SESSION dir 이미 존재 — 다른 --name 사용 또는 'debate forget $SESSION'"
+    exit 1
+  fi
+
+  # 회전: 자동 생성 세션 중 오래된 것 정리
+  _rotate_autos
+
+  echo "[*] session: $SESSION"
   echo "[*] session id 발급 중..."
   local a_sid b_sid arb_sid
   a_sid=$(_issue_session_id "$a_label")
@@ -245,70 +287,111 @@ cmd_start() {
   echo "    B ($b_label):       ${b_sid:-(unsupported)}"
   echo "    arbiter ($arbiter_label): ${arb_sid:-(unsupported)}"
 
-  # 시작 명령 빌드
   local a_cmd b_cmd arbiter_cmd
   a_cmd=$(_build_start_cmd "$a_label" "$a_sid")
   b_cmd=$(_build_start_cmd "$b_label" "$b_sid")
   arbiter_cmd=$(_build_start_cmd "$arbiter_label" "$arb_sid")
 
-  # 메타데이터를 current 에 즉시 저장
-  META_NAME="current"
+  META_NAME="$SESSION"
   META_PROJECT_DIR="$project_dir"
   META_A_LABEL="$a_label"; META_A_SESSION_ID="$a_sid"
   META_B_LABEL="$b_label"; META_B_SESSION_ID="$b_sid"
   META_ARBITER_LABEL="$arbiter_label"; META_ARBITER_SESSION_ID="$arb_sid"
   META_TOPIC="$topic"
-  _save_meta "$SESSIONS_DIR/current"
+  _save_meta "$SESSIONS_DIR/$SESSION"
 
-  _setup_layout "$project_dir" "$a_label" "$a_cmd" "$b_label" "$b_cmd" "$arbiter_label" "$arbiter_cmd" "MODERATOR"
-  _log "start" "a=$a_label/$a_sid b=$b_label/$b_sid arbiter=$arbiter_label/$arb_sid topic=$topic"
+  _set_active "$SESSION"
+
+  _setup_layout "$SESSION" "$project_dir" "$a_label" "$a_cmd" "$b_label" "$b_cmd" "$arbiter_label" "$arbiter_cmd" "MODERATOR — $SESSION"
+  _log "start" "session=$SESSION a=$a_label/$a_sid b=$b_label/$b_sid arbiter=$arbiter_label/$arb_sid topic=$topic"
   tmux attach -t "$SESSION"
 }
 
 cmd_stop() {
-  # 종료 직전에 각 pane scrollback 캡처해서 current 에 저장
-  if [ -d "$SESSIONS_DIR/current" ] && tmux has-session -t "$SESSION" 2>/dev/null; then
+  local SESSION
+  SESSION="${1:-$(_resolve_session 2>/dev/null || true)}"
+  if [ -z "$SESSION" ]; then
+    echo "[!] 활성 세션 없음 — debate ls 로 확인 후 'debate stop <name>' 또는 DEBATE_SESSION=... 사용"
+    exit 1
+  fi
+  # scrollback 캡처
+  if [ -d "$SESSIONS_DIR/$SESSION" ] && tmux has-session -t "$SESSION" 2>/dev/null; then
     for p in a b arbiter; do
-      tmux-bridge read "$p" 500 > "$SESSIONS_DIR/current/${p}.scrollback.txt" 2>/dev/null || true
+      tmux-bridge read "$p" 500 > "$SESSIONS_DIR/$SESSION/${p}.scrollback.txt" 2>/dev/null || true
     done
   fi
-  tmux kill-session -t "$SESSION" 2>/dev/null && echo "stopped: $SESSION" || echo "no session: $SESSION"
-  # current → auto-<ts>
-  _archive_current
+  tmux kill-session -t "$SESSION" 2>/dev/null && echo "stopped: $SESSION" || echo "no tmux session: $SESSION"
+  # active 가 이 세션이면 클리어
+  if [ -f "$ACTIVE_FILE" ] && [ "$(cat "$ACTIVE_FILE")" = "$SESSION" ]; then
+    rm -f "$ACTIVE_FILE"
+  fi
+  _rotate_autos
 }
 
 # ─── 세션 저장/관리 ─────────────────────────────────────
 
 cmd_save() {
-  local name="${1:-}"
-  [ -z "$name" ] && { echo "usage: debate save <name>"; exit 1; }
-  case "$name" in current|auto-*) echo "[!] reserved name: $name"; exit 1 ;; esac
-  [ -d "$SESSIONS_DIR/current" ] || { echo "[!] no current session — start 부터"; exit 1; }
-  [ -d "$SESSIONS_DIR/$name" ] && { echo "[!] $name 이미 존재"; exit 1; }
-  cp -r "$SESSIONS_DIR/current" "$SESSIONS_DIR/$name"
-  # NAME 필드 업데이트
-  META_NAME="$name"
-  _load_meta "$SESSIONS_DIR/$name"
-  _save_meta "$SESSIONS_DIR/$name"
-  echo "[✓] saved: $name"
+  local new="${1:-}"
+  [ -z "$new" ] && { echo "usage: debate save <new-name>"; exit 1; }
+  local SESSION
+  SESSION=$(_resolve_session 2>/dev/null) || { echo "[!] 활성 세션 없음"; exit 1; }
+  local new_id="debate-$new"
+  [ "$SESSION" = "$new_id" ] && { echo "[!] 이미 같은 이름"; exit 0; }
+  [ -d "$SESSIONS_DIR/$new_id" ] && { echo "[!] $new_id 이미 존재"; exit 1; }
+  if tmux has-session -t "$new_id" 2>/dev/null; then
+    echo "[!] $new_id tmux 세션 이미 실행 중"; exit 1
+  fi
+  # dir rename
+  mv "$SESSIONS_DIR/$SESSION" "$SESSIONS_DIR/$new_id"
+  # meta NAME 갱신
+  _load_meta "$SESSIONS_DIR/$new_id"
+  META_NAME="$new_id"
+  _save_meta "$SESSIONS_DIR/$new_id"
+  # tmux session rename (살아있으면)
+  if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux rename-session -t "$SESSION" "$new_id" 2>/dev/null || true
+    # moderator 타이틀 갱신 — 베스트 에포트
+    tmux list-panes -t "$new_id" -F '#{pane_id} #{pane_title}' 2>/dev/null | while read -r pid title; do
+      case "$title" in
+        MODERATOR*) tmux select-pane -t "$pid" -T "MODERATOR — $new_id" ;;
+      esac
+    done
+  fi
+  # active pointer 갱신
+  if [ -f "$ACTIVE_FILE" ] && [ "$(cat "$ACTIVE_FILE")" = "$SESSION" ]; then
+    _set_active "$new_id"
+  fi
+  echo "[✓] renamed: $SESSION → $new_id"
 }
 
 cmd_list() {
   [ -d "$SESSIONS_DIR" ] || { echo "(no sessions)"; return 0; }
-  printf '%-30s %-22s %s\n' "NAME" "CREATED" "TOPIC / PROJECT"
-  printf '%-30s %-22s %s\n' "------------------------------" "----------------------" "----------------"
+  local active=""
+  [ -f "$ACTIVE_FILE" ] && active=$(cat "$ACTIVE_FILE")
+  printf '%-28s %-10s %-22s %s\n' "NAME" "STATE" "CREATED" "TOPIC / PROJECT"
+  printf '%-28s %-10s %-22s %s\n' "----------------------------" "----------" "----------------------" "----------------"
   local d
   for d in $(ls -1t "$SESSIONS_DIR" 2>/dev/null); do
     [ -f "$SESSIONS_DIR/$d/meta" ] || continue
     _load_meta "$SESSIONS_DIR/$d" 2>/dev/null || continue
+    local state="-"
+    if tmux has-session -t "$d" 2>/dev/null; then
+      state="running"
+    fi
+    [ "$d" = "$active" ] && state="${state}*"
     local desc="${META_TOPIC:-}"
     [ -z "$desc" ] && desc="$META_PROJECT_DIR"
-    printf '%-30s %-22s %s\n' "$d" "${META_CREATED:-?}" "$desc"
+    printf '%-28s %-10s %-22s %s\n' "$d" "$state" "${META_CREATED:-?}" "$desc"
   done
+  echo ""
+  echo "(* = active default; running = tmux 세션 살아있음)"
 }
 
 cmd_show() {
-  local name="${1:-current}"
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    name=$(_resolve_session 2>/dev/null) || { echo "[!] 활성 세션 없음 — 'debate show <name>'"; exit 1; }
+  fi
   local dir="$SESSIONS_DIR/$name"
   [ -d "$dir" ] || { echo "[!] no session: $name"; exit 1; }
   _load_meta "$dir" || exit 1
@@ -358,34 +441,50 @@ _launch_from_meta() {
     arbiter_cmd=$(_build_start_cmd "$arb_label" "$arb_sid")
   fi
 
-  # 이전 current 회전 후 새 current 메타 작성 (fork 면 새 id, resume 이면 동일 id)
-  _archive_current
+  local SESSION
   local new_a_sid="$META_A_SESSION_ID" new_b_sid="$META_B_SESSION_ID"
+
   if [ "$fork" = "1" ]; then
-    # claude --fork-session 은 세션 자체는 그대로 두고 새 ID 를 만듦. 우리는 추적 못하니
-    # 일단 빈 값으로 두고 사용자가 나중에 save 시 갱신할 수 있게 함
+    # 새 dir 로 분기 (원본 보존)
+    SESSION=$(_gen_session_id)
+    if [ -d "$SESSIONS_DIR/$SESSION" ]; then SESSION=$(_gen_session_id); fi
+    cp -r "$dir" "$SESSIONS_DIR/$SESSION"
+    # cursor 는 새 chatId 발급 (claude 는 --fork-session 이 자동으로 새 id 부여)
     new_a_sid=""
-    # cursor 는 --resume 만 되므로 실질 fork 는 새 create-chat 필요 — 별도 처리
     if [ "$META_B_LABEL" = "cursor" ]; then
       new_b_sid=$(agent create-chat 2>/dev/null)
       b_cmd="agent --resume $new_b_sid"
     fi
+    META_NAME="$SESSION"
+    META_PROJECT_DIR="$project_dir"
+    META_A_SESSION_ID="$new_a_sid"
+    META_B_SESSION_ID="$new_b_sid"
+    META_ARBITER_SESSION_ID="$arb_sid"
+    _save_meta "$SESSIONS_DIR/$SESSION"
+  else
+    # resume 은 같은 dir/세션 이름 그대로
+    SESSION="$name"
+    if tmux has-session -t "$SESSION" 2>/dev/null; then
+      echo "[!] $SESSION 이 이미 실행 중입니다 — attach: tmux attach -t $SESSION"
+      exit 1
+    fi
+    # arbiter 가 fresh 면 메타에 새 id 반영
+    if [ "$include_arbiter" != "1" ]; then
+      META_ARBITER_SESSION_ID="$arb_sid"
+      _save_meta "$dir"
+    fi
   fi
-  META_NAME="current"
-  META_PROJECT_DIR="$project_dir"
-  META_A_SESSION_ID="$new_a_sid"
-  META_B_SESSION_ID="$new_b_sid"
-  META_ARBITER_SESSION_ID="$arb_sid"
-  _save_meta "$SESSIONS_DIR/current"
+
+  _set_active "$SESSION"
 
   local tag=""
   [ "$fork" = "1" ] && tag=" (forked)"
-  _setup_layout "$project_dir" \
+  _setup_layout "$SESSION" "$project_dir" \
     "$META_A_LABEL$tag" "$a_cmd" \
     "$META_B_LABEL$tag" "$b_cmd" \
     "$arb_label" "$arbiter_cmd" \
-    "MODERATOR — resumed: $name"
-  _log "resume" "name=$name fork=$fork include_arbiter=$include_arbiter"
+    "MODERATOR — $SESSION (resumed: $name)"
+  _log "resume" "session=$SESSION src=$name fork=$fork include_arbiter=$include_arbiter"
   tmux attach -t "$SESSION"
 }
 
@@ -422,10 +521,28 @@ cmd_fork() {
 cmd_forget() {
   local name="${1:-}"
   [ -z "$name" ] && { echo "usage: debate forget <name>"; exit 1; }
-  case "$name" in current) echo "[!] current 는 debate stop 사용"; exit 1 ;; esac
   [ -d "$SESSIONS_DIR/$name" ] || { echo "[!] no session: $name"; exit 1; }
+  if tmux has-session -t "$name" 2>/dev/null; then
+    tmux kill-session -t "$name" 2>/dev/null || true
+  fi
   rm -rf "$SESSIONS_DIR/$name"
+  if [ -f "$ACTIVE_FILE" ] && [ "$(cat "$ACTIVE_FILE")" = "$name" ]; then
+    rm -f "$ACTIVE_FILE"
+  fi
   echo "[✓] forgotten: $name"
+}
+
+cmd_attach() {
+  local name="${1:-}"
+  if [ -z "$name" ]; then
+    name=$(_resolve_session 2>/dev/null) || { echo "[!] 활성 세션 없음 — 'debate attach <name>' 또는 'debate ls'"; exit 1; }
+  fi
+  if ! tmux has-session -t "$name" 2>/dev/null; then
+    echo "[!] tmux 세션 없음: $name (resume 필요할 수 있음 → debate resume $name)"
+    exit 1
+  fi
+  _set_active "$name"
+  tmux attach -t "$name"
 }
 
 cmd_export() {
@@ -570,21 +687,30 @@ debate — Claude Code × Cursor Agent debate CLI
   moderator         사용자 (이 CLI 를 실행하는 진행자 pane)
 
 세션 관리:
-  debate start [--a claude|cursor] [--b claude|cursor] [--arbiter ...] [--topic <text>] [dir]
-                                        4-pane 토론 세션 시작 (session-id 자동 발급)
-  debate stop                           세션 종료 (current → auto-<ts> 자동 보존)
+  debate start [--name <n>] [--a claude|cursor] [--b ...] [--arbiter ...] [--topic <text>] [dir]
+                                        4-pane 토론 세션 시작
+                                        세션 id 자동 생성 (debate-<8자리>),
+                                        --name 지정 시 debate-<name>
+  debate stop [name]                    세션 종료 (dir 은 보존)
+  debate attach [name]                  실행 중인 세션에 attach
   debate doctor                         의존성 점검
 
 세션 저장/복원:
-  debate save <name>                    current 세션을 의미있는 이름으로 저장
-  debate list (= ls)                    저장된 세션 목록
+  debate save <new-name>                활성 세션을 debate-<new-name> 으로 rename
+  debate list (= ls)                    모든 세션 목록 ([running] / active 표시)
   debate show [name]                    세션 메타데이터 + 로그 미리보기
   debate resume <name> [--include-arbiter] [--in <dir>]
                                         저장된 세션 복원 (native --resume)
   debate fork <name> [--include-arbiter] [--in <dir>]
-                                        세션을 분기 (claude --fork-session)
-  debate forget <name> (= rm)           세션 삭제
+                                        세션을 새 dir 로 분기 (claude --fork-session)
+  debate forget <name> (= rm)           세션 삭제 (running 이면 같이 kill)
   debate export <name> <out.tar.gz>     세션 tarball 로 내보내기
+
+다중 세션:
+  여러 debate 를 동시 실행 가능. 각 세션은 고유 id (debate-<uuid>) 로 격리.
+  moderator pane 안에서 친 명령은 자동으로 그 세션을 대상으로 함.
+  외부에서는 ~/.debate/active 의 마지막 세션이 기본값.
+  명시 지정: DEBATE_SESSION=debate-7f3a1b2c debate hear a
 
 대화:
   debate tell <target> <msg>            target (a|b|arbiter) 에 메시지 입력 + Enter
@@ -608,7 +734,7 @@ debate — Claude Code × Cursor Agent debate CLI
 
 환경변수:
   DEBATE_LOG           로그 파일 경로 (기본 ~/.debate/log-YYYYMMDD.md)
-  DEBATE_SESSION       tmux 세션 이름 (기본 debate)
+  DEBATE_SESSION       tmux 세션 이름 강제 지정 (대부분 자동 결정됨)
   DEBATE_A_CMD         A pane 기본 CLI (기본 claude)
   DEBATE_B_CMD         B pane 기본 CLI (기본 cursor)
   DEBATE_ARBITER_CMD   arbiter pane 기본 CLI (기본 claude)
@@ -624,7 +750,8 @@ EOF
 cmd="${1:-}"; [ $# -gt 0 ] && shift
 case "$cmd" in
   start)              cmd_start "$@" ;;
-  stop|kill)          cmd_stop ;;
+  stop|kill)          cmd_stop "$@" ;;
+  attach)             cmd_attach "$@" ;;
   doctor)             cmd_doctor ;;
   tell)               cmd_tell "$@" ;;
   hear)               cmd_hear "$@" ;;

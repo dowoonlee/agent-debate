@@ -5,7 +5,8 @@ _debate() {
   local -a cmds modes targets log_subs
   cmds=(
     'start:토론 세션 시작'
-    'stop:세션 종료 (자동 보존)'
+    'stop:세션 종료 (dir 보존)'
+    'attach:실행 중인 세션에 attach'
     'doctor:의존성 점검'
     'tell:pane 에 메시지 입력'
     'hear:pane 출력 캡처'
@@ -82,7 +83,7 @@ _debate() {
     start)
       (( CURRENT == 3 )) && _path_files -/
       ;;
-    show|resume|fork|forget|rm|export)
+    show|resume|fork|forget|rm|export|attach|stop)
       (( CURRENT == 3 )) && _debate_sessions
       ;;
   esac
