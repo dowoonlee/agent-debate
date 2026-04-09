@@ -626,10 +626,18 @@ def replace_managed(events):
         lst = hooks.setdefault(ev, [])
         lst[:] = [e for e in lst if "debate-managed" not in e.get("command", "")]
 
-replace_managed(["stop", "beforeSubmitPrompt"])
+replace_managed(["stop", "beforeSubmitPrompt", "beforeShellExecution"])
 
-# stop → menu-maybe (menu-auto 켜져있으면 메뉴, 아니면 no-op)
+# beforeShellExecution → focus-self (cursor 가 shell 권한 물어볼 때 HITL)
+# 출력 비워서 cursor 의 default approval 동작 그대로 유지
+hooks.setdefault("beforeShellExecution", []).append({
+    "command": f'{debate_path} _hook focus-self  # debate-managed'
+})
+# stop: focus-self (HITL = 응답 끝, 입력 대기) + menu-maybe (auto 시 메뉴)
 hooks.setdefault("stop", []).append({
+    "command": f'{debate_path} _hook focus-self  # debate-managed'
+})
+hooks["stop"].append({
     "command": f'{debate_path} _hook menu-maybe  # debate-managed'
 })
 hooks.setdefault("beforeSubmitPrompt", []).append({
@@ -819,6 +827,11 @@ cmd_focus() {
 # 내부: hook 에서 호출. 현재 pane 에 focus 이동
 cmd__hook() {
   local action="${1:-}"
+  # 진단 로그 — 어떤 hook 이 언제 fire 됐는지
+  {
+    mkdir -p "$HOME/.debate"
+    echo "[$(date +%T)] _hook $action  TMUX_PANE=${TMUX_PANE:-?}  $(tmux display-message -p '#{session_name}/#{pane_title}' 2>/dev/null || true)"
+  } >> "$HOME/.debate/hook.log" 2>/dev/null
   case "$action" in
     focus-self)
       [ -n "${TMUX_PANE:-}" ] && tmux select-pane -t "$TMUX_PANE" 2>/dev/null || true
