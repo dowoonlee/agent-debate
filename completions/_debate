@@ -8,6 +8,8 @@ _debate() {
     'stop:세션 종료 (dir 보존)'
     'attach:실행 중인 세션에 attach'
     'focus:특정 pane 으로 focus 이동'
+    'menu:자주 쓰는 명령 메뉴 팝업'
+    'menu-auto:Stop hook 시 메뉴 자동 팝업 on/off'
     'install-hooks:HITL focus hook 설치 (claude/cursor)'
     'uninstall-hooks:hook 제거'
     'hooks-status:hook 설치 상태'
@@ -92,6 +94,9 @@ _debate() {
       ;;
     focus)
       (( CURRENT == 3 )) && compadd -- a b arbiter moderator
+      ;;
+    menu-auto)
+      (( CURRENT == 3 )) && compadd -- on off status
       ;;
   esac
 }

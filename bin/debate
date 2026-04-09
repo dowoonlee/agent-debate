@@ -588,6 +588,18 @@ ups.append({
         "command": f'{debate_path} _hook focus-moderator  # debate-managed'
     }]
 })
+# Stop → menu-maybe (menu-auto 켜져있으면 메뉴 팝업)
+stop = hooks.setdefault("Stop", [])
+stop[:] = [e for e in stop if not any(
+    "debate-managed" in (h.get("command", "") if isinstance(h, dict) else "")
+    for h in (e.get("hooks", []) if isinstance(e, dict) else [])
+)]
+stop.append({
+    "hooks": [{
+        "type": "command",
+        "command": f'{debate_path} _hook menu-maybe  # debate-managed'
+    }]
+})
 
 with open(path, "w") as f:
     json.dump(data, f, indent=2)
@@ -616,8 +628,9 @@ def replace_managed(events):
 
 replace_managed(["stop", "beforeSubmitPrompt"])
 
+# stop → menu-maybe (menu-auto 켜져있으면 메뉴, 아니면 no-op)
 hooks.setdefault("stop", []).append({
-    "command": f'{debate_path} _hook focus-self  # debate-managed'
+    "command": f'{debate_path} _hook menu-maybe  # debate-managed'
 })
 hooks.setdefault("beforeSubmitPrompt", []).append({
     "command": f'{debate_path} _hook focus-moderator  # debate-managed'
@@ -630,9 +643,11 @@ PY
 
   echo ""
   echo "동작:"
-  echo "  - claude 가 권한/입력 대기 시: 그 pane 으로 focus 이동"
-  echo "  - cursor agent stop 시: 그 pane 으로 focus 이동"
-  echo "  - 사용자가 답변 제출 시: moderator pane 으로 자동 복귀"
+  echo "  - claude permission_prompt|idle_prompt → 그 pane focus (HITL)"
+  echo "  - claude/cursor Stop → menu-auto 켜져있으면 moderator 에 메뉴 팝업"
+  echo "  - 사용자가 답변 제출 시 → moderator pane 으로 자동 복귀"
+  echo ""
+  echo "menu 자동 트리거를 켜려면: debate menu-auto on"
 }
 
 cmd_uninstall_hooks() {
@@ -703,6 +718,80 @@ for label, path in [("claude", "~/.claude/settings.json"),
 PY
 }
 
+cmd_menu() {
+  local SESSION
+  SESSION=$(_resolve_session 2>/dev/null) || { echo "[!] 활성 세션 없음"; exit 1; }
+  if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "[!] tmux 세션 없음: $SESSION"; exit 1
+  fi
+
+  local mod_pane
+  mod_pane=$(tmux list-panes -t "$SESSION" -F '#{pane_id} #{pane_title}' 2>/dev/null \
+    | awk '$2 ~ /^MODERATOR/ {print $1; exit}')
+  [ -z "$mod_pane" ] && { echo "[!] moderator pane not found in $SESSION"; exit 1; }
+
+  # display-menu 인자 빌드: -t target -T title 다음에 (label, key, command) 트리플 반복
+  local args=( -t "$mod_pane" -T " debate menu " )
+
+  _menu_add() {
+    args+=( "$1" "$2" "send-keys -t $mod_pane \"$3\" Enter" )
+  }
+  _menu_sep() { args+=( "" ); }
+
+  # 빌트인
+  _menu_add "  1. relay     a → b  rebut       " 1 "debate relay a b rebut"
+  _menu_add "  2. relay     b → a  rebut       " 2 "debate relay b a rebut"
+  _menu_add "  3. relay-sum a → b  review      " 3 "debate relay-sum a b review"
+  _menu_add "  4. relay-sum b → a  review      " 4 "debate relay-sum b a review"
+  _menu_sep
+  _menu_add "  5. round 2 review --sum         " 5 "debate round 2 review 20 --sum"
+  _menu_add "  6. verdict                      " 6 "debate verdict"
+  _menu_add "  7. shout 결론 정리              " 7 "debate shout 지금까지 토론을 종합해서 최종 결론과 수정 방안을 정리해"
+  _menu_sep
+
+  # 사용자 conf (~/.debate/menu.conf)
+  local conf="$HOME/.debate/menu.conf"
+  if [ -f "$conf" ]; then
+    local i=8
+    while IFS='|' read -r label cmd; do
+      [ -z "$label" ] && continue
+      case "$label" in \#*) continue ;; esac
+      label="${label#"${label%%[![:space:]]*}"}"  # ltrim
+      cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+      [ -z "$cmd" ] && continue
+      _menu_add "$(printf '  %d. %s' "$i" "$label")" "$i" "$cmd"
+      i=$((i+1))
+    done < "$conf"
+    _menu_sep
+  fi
+
+  _menu_add "  q. cancel                       " q ""
+
+  tmux display-menu "${args[@]}"
+}
+
+cmd_menu_auto() {
+  local arg="${1:-status}"
+  local flag="$HOME/.debate/menu-auto"
+  case "$arg" in
+    on|enable)
+      mkdir -p "$(dirname "$flag")"
+      touch "$flag"
+      echo "[✓] menu-auto: ON  (a/b/arbiter Stop hook 시 자동 메뉴 팝업)"
+      ;;
+    off|disable)
+      rm -f "$flag"
+      echo "[✓] menu-auto: OFF"
+      ;;
+    status)
+      if [ -f "$flag" ]; then echo "menu-auto: ON"; else echo "menu-auto: OFF"; fi
+      ;;
+    *)
+      echo "usage: debate menu-auto on|off|status"; exit 1
+      ;;
+  esac
+}
+
 cmd_focus() {
   local label="${1:-}"
   [ -z "$label" ] && { echo "usage: debate focus <a|b|arbiter|moderator>"; exit 1; }
@@ -743,6 +832,14 @@ cmd__hook() {
       pid=$(tmux list-panes -t "$sess" -F '#{pane_id} #{pane_title}' 2>/dev/null \
         | awk '$2 ~ /^MODERATOR/ {print $1; exit}')
       [ -n "$pid" ] && tmux select-pane -t "$pid" 2>/dev/null || true
+      ;;
+    menu-maybe)
+      # menu-auto 가 켜져있을 때만 메뉴 팝업
+      [ -f "$HOME/.debate/menu-auto" ] || return 0
+      local sess
+      sess=$(tmux display-message -p '#{session_name}' 2>/dev/null) || return 0
+      case "$sess" in debate-*) ;; *) return 0 ;; esac
+      DEBATE_SESSION="$sess" "$SELF" menu 2>/dev/null || true
       ;;
   esac
   # hook 표준 출력은 비움 (cursor 가 JSON 파싱 시도하므로 안전한 빈 라인)
@@ -997,10 +1094,19 @@ debate — Claude Code × Cursor Agent debate CLI
   debate doctor                         의존성 + hooks 점검
 
 HITL focus hooks:
-  debate install-hooks                  claude/cursor 의 알림 hook 설치
-                                        → HITL 시 자동으로 해당 pane focus
+  debate install-hooks                  claude/cursor 의 hook 설치
+                                        - permission/idle 시 pane focus
+                                        - Stop 시 (menu-auto on) 메뉴 팝업
   debate uninstall-hooks                hook 제거
   debate hooks-status                   설치 상태 확인
+
+메뉴 (자주 쓰는 명령 빠른 실행):
+  debate menu                           moderator 에 tmux display-menu 팝업
+                                        화살표/숫자로 선택 → 명령 자동 실행
+  debate menu-auto on|off|status        a/b Stop 시 자동 팝업 토글
+  사용자 정의 항목: ~/.debate/menu.conf
+                                        형식: 라벨|debate command (line 단위)
+                                        예:    review round 3|debate round 3 review
 
 키바인딩 (debate start 시 자동 등록, prefix = Ctrl-b):
   prefix + a/b/r/m   → A/B/arbiter/moderator pane 으로 focus 이동
@@ -1068,6 +1174,8 @@ case "$cmd" in
   stop|kill)          cmd_stop "$@" ;;
   attach)             cmd_attach "$@" ;;
   focus)              cmd_focus "$@" ;;
+  menu)               cmd_menu "$@" ;;
+  menu-auto)          cmd_menu_auto "$@" ;;
   install-hooks)      cmd_install_hooks "$@" ;;
   uninstall-hooks)    cmd_uninstall_hooks "$@" ;;
   hooks-status)       cmd_hooks_status "$@" ;;
