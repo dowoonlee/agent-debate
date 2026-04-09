@@ -196,6 +196,62 @@ debate pick a b
 # fzf 가 있으면 fzf 메뉴, 없으면 select 메뉴
 ```
 
+### 빠른 명령 메뉴 (v0.5.0)
+
+a/b 가 응답을 마치면 (또는 수동 호출) moderator pane 에 tmux display-menu 가 팝업됩니다. 화살표/숫자/Enter 로 자주 쓰는 명령을 즉시 실행.
+
+```bash
+# 셋업 (1회)
+debate install-hooks       # Stop hook 추가
+debate menu-auto on        # Stop 시 자동 팝업 토글
+
+# 수동 호출
+debate menu
+```
+
+메뉴 모양:
+```
+┌─ debate menu ──────────────────────┐
+│  1. relay     a → b  rebut         │
+│  2. relay     b → a  rebut         │
+│  3. relay-sum a → b  review        │
+│  4. relay-sum b → a  review        │
+│  ──────────                        │
+│  5. round 2 review --sum           │
+│  6. verdict                        │
+│  7. shout 결론 정리                │
+│  ──────────                        │
+│  8. (사용자 conf 항목)             │
+│  ──────────                        │
+│  q. cancel                         │
+└────────────────────────────────────┘
+```
+
+선택하면 moderator pane 에 해당 명령이 자동으로 입력되고 Enter 됩니다.
+
+#### 사용자 정의 항목
+
+`~/.debate/menu.conf` 에 line 단위로 추가:
+
+```
+# 라벨|debate command
+review round 3|debate round 3 review 20 --sum
+quick verdict|debate verdict 60
+fork test|debate fork debate-current --include-arbiter
+```
+
+`#` 으로 시작하는 줄은 주석. 빌트인 7개 다음에 8번부터 자동 번호.
+
+#### 자동 트리거 토글
+
+```bash
+debate menu-auto on        # a/b/arbiter Stop 시 자동 팝업
+debate menu-auto off       # 끄기 (round 등 자동 명령 시 noisy 하면)
+debate menu-auto status    # 현재 상태
+```
+
+자동 트리거는 `~/.debate/menu-auto` 파일 존재 여부로 판단. hook 안에서 매번 체크.
+
 ### HITL 자동 focus (v0.4.0)
 
 claude/cursor 가 사용자 입력을 기다릴 때 자동으로 그 pane 으로 focus 가 이동하고, 답변 후 moderator pane 으로 돌아옵니다. claude/cursor 의 native hook 시스템을 사용합니다.
@@ -373,7 +429,9 @@ debate log clear            # 비우기
 | `debate shout [--all] <msg>` | 양쪽 토론자 동시 지시 |
 | `debate verdict [lines]` | a+b 출력을 arbiter 에 판정 요청 |
 | `debate focus <a\|b\|arbiter\|moderator>` | 특정 pane 으로 focus 이동 |
-| `debate install-hooks` | HITL 자동 focus hook 설치 |
+| `debate menu` | 자주 쓰는 명령 메뉴 팝업 |
+| `debate menu-auto on\|off\|status` | Stop 시 자동 팝업 토글 |
+| `debate install-hooks` | hook 설치 (HITL focus + Stop menu) |
 | `debate uninstall-hooks` | hook 제거 |
 | `debate hooks-status` | hook 설치 상태 확인 |
 | `debate attach [name]` | 실행 중인 세션 attach |

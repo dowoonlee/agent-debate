@@ -71,6 +71,14 @@ debate ls                                     # 어디서든 전체 확인
 - **중재자 판정** (`verdict`) — A/B 출력을 모아 arbiter 에게 판정 요청
 - **인터랙티브 mode 선택** (`pick`) — fzf/select 메뉴로 mode 고르기
 
+### 빠른 명령 메뉴 (v0.5.0)
+- **tmux native display-menu** — a/b 응답 마치면 moderator 에 자주 쓰는 명령 메뉴 팝업 (의존 0개)
+- **화살표/숫자 네비게이션** — 위/아래 + Enter 또는 숫자키로 즉시 선택
+- **자동 실행** — 선택 시 moderator pane 에 명령 자동 입력 + 실행
+- **빌트인 + 사용자 정의** — `~/.debate/menu.conf` (`라벨|command` per line) 로 항목 추가
+- **자동 트리거 토글** — `debate menu-auto on/off`. round 같은 자동 모드 중엔 끄고 사용
+- 활성화: `debate menu-auto on`, 수동: `debate menu`
+
 ### HITL 자동 focus (v0.4.0)
 - **자동 pane focus** — claude/cursor 가 권한 요청·입력 대기 시 해당 pane으로 자동 focus 이동, 답변 제출 후 moderator 로 자동 복귀
 - **claude hooks** — `Notification (permission_prompt|idle_prompt)` → focus pane, `UserPromptSubmit` → focus moderator
